@@ -5,9 +5,12 @@ import cv2
 import time
 import darknet
 import argparse
+import imageio
 from threading import Thread, enumerate
 from queue import Queue
 
+import numpy as np
+NUM_CHANNELS = 3
 
 def parser():
     parser = argparse.ArgumentParser(description="YOLO Object Detection")
@@ -54,66 +57,53 @@ def check_arguments_errors(args):
 
 
 def set_saved_video(input_video, output_video, size):
-    fourcc = cv2.VideoWriter_fourcc(*"MJPG")
+    fourcc = cv2.VideoWriter_fourcc(*"XVID")
     fps = int(input_video.get(cv2.CAP_PROP_FPS))
     video = cv2.VideoWriter(output_video, fourcc, fps, size)
     return video
 
+def convert2original(bbox):
+    x, y, w, h = bbox
 
-def convert2relative(bbox):
-    """
-    YOLO format use relative coordinates for annotation
-    """
-    x, y, w, h  = bbox
-    _height     = darknet_height
-    _width      = darknet_width
-    return x/_width, y/_height, w/_width, h/_height
+    letterbox_scaling_factor = min(darknet_width/video_width, darknet_height/video_height)
+    resized_height = int(video_height * letterbox_scaling_factor)
+    resized_width = int(video_width * letterbox_scaling_factor)
 
+    remaining_height = darknet_height - resized_height
+    height_padding = remaining_height // 2
+    remaining_width = darknet_width - resized_width
+    width_padding = remaining_width // 2
 
-def convert2original(image, bbox):
-    x, y, w, h = convert2relative(bbox)
-
-    image_h, image_w, __ = image.shape
-
-    orig_x       = int(x * image_w)
-    orig_y       = int(y * image_h)
-    orig_width   = int(w * image_w)
-    orig_height  = int(h * image_h)
+    orig_x = int((x - width_padding) / letterbox_scaling_factor)
+    orig_y = int((y - height_padding) / letterbox_scaling_factor)
+    orig_width = int(w / letterbox_scaling_factor)
+    orig_height = int(h / letterbox_scaling_factor)
 
     bbox_converted = (orig_x, orig_y, orig_width, orig_height)
 
     return bbox_converted
 
-
-def convert4cropping(image, bbox):
-    x, y, w, h = convert2relative(bbox)
-
-    image_h, image_w, __ = image.shape
-
-    orig_left    = int((x - w / 2.) * image_w)
-    orig_right   = int((x + w / 2.) * image_w)
-    orig_top     = int((y - h / 2.) * image_h)
-    orig_bottom  = int((y + h / 2.) * image_h)
-
-    if (orig_left < 0): orig_left = 0
-    if (orig_right > image_w - 1): orig_right = image_w - 1
-    if (orig_top < 0): orig_top = 0
-    if (orig_bottom > image_h - 1): orig_bottom = image_h - 1
-
-    bbox_cropping = (orig_left, orig_top, orig_right, orig_bottom)
-
-    return bbox_cropping
-
-
 def video_capture(frame_queue, darknet_image_queue):
-    while cap.isOpened():
-        ret, frame = cap.read()
-        if not ret:
-            break
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        frame_resized = cv2.resize(frame_rgb, (darknet_width, darknet_height),
-                                   interpolation=cv2.INTER_LINEAR)
-        frame_queue.put(frame)
+    for frame_rgb in reader:
+        frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+        frame_queue.put(frame_bgr)
+
+        frame = frame_rgb
+        letterbox_scaling_factor = min(darknet_width/video_width, darknet_height/video_height)
+        resized_height = int(video_height * letterbox_scaling_factor)
+        resized_width = int(video_width * letterbox_scaling_factor)
+        same_aspect_ratio_resized = cv2.resize(frame, (resized_width, resized_height), interpolation=cv2.INTER_LINEAR)
+
+        remaining_height = darknet_height - resized_height
+        height_padding = remaining_height // 2
+        remaining_width = darknet_width - resized_width
+        width_padding = remaining_width // 2
+
+        frame_resized = np.zeros((darknet_height, darknet_width, NUM_CHANNELS), dtype=np.uint8)
+        frame_resized[height_padding:resized_height + height_padding,
+                      width_padding:resized_width + width_padding,
+                      :] = same_aspect_ratio_resized
+
         img_for_detect = darknet.make_image(darknet_width, darknet_height, 3)
         darknet.copy_image_from_bytes(img_for_detect, frame_resized.tobytes())
         darknet_image_queue.put(img_for_detect)
@@ -144,7 +134,7 @@ def drawing(frame_queue, detections_queue, fps_queue):
         detections_adjusted = []
         if frame is not None:
             for label, confidence, bbox in detections:
-                bbox_adjusted = convert2original(frame, bbox)
+                bbox_adjusted = convert2original(bbox)
                 detections_adjusted.append((str(label), confidence, bbox_adjusted))
             image = darknet.draw_boxes(detections_adjusted, frame, class_colors)
             if not args.dont_show:
@@ -176,6 +166,7 @@ if __name__ == '__main__':
     darknet_height = darknet.network_height(network)
     input_path = str2int(args.input)
     cap = cv2.VideoCapture(input_path)
+    reader = imageio.get_reader(input_path, format='FFMPEG')
     video_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     video_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     Thread(target=video_capture, args=(frame_queue, darknet_image_queue)).start()
