@@ -1,3 +1,9 @@
+## Visual Labs adjustments:
+There have been a few changes made to the original source code:
+
+1. The Makefile has been tweaked to fit the architecture that we are running Darknet on. If the machines that we run Darknet on differ between AWS and Azure, then there will need to be different Makefiles for each environment.
+2. The included python script for running Darknet on videos, `darknet_video.py`, has been modified to use ffmpeg as a backend for reading videos (through the `imageio` library) and to use letterbox cropping on the images it passes to Darknet. These changes were made to match the pipeline used in the FastRedaction flow so that the raw Darknet output predictions for videos can be compared to the smoothed tracks that are produced in FastRedaction using that raw Darknet output as its input.
+
 # Yolo v4, v3 and v2 for Windows and Linux
 
 ## (neural networks for object detection)
